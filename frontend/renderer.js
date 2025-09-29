@@ -26,6 +26,10 @@ createApp({
       displayedResults: [],
       pageSize: 50,
       isTruncated: false,
+
+      // Состояние для мобильной версии
+      isMobileScreen: false,
+      mobileView: 'chat', // 'chat' or 'visualization'
     }
   },
   computed: {
@@ -66,15 +70,17 @@ createApp({
       this.activeResult = null;
       this.displayedResults = [];
       this.isTruncated = false;
+      this.mobileView = 'chat';
     },
 
     logout() {
       this.currentUser = null;
       this.userSearchQuery = '';
+      this.mobileView = 'chat';
       this.fetchUsers();
     },
 
-
+    // --- МЕТОДЫ ДЛЯ УПРАВЛЕНИЯ ЧАТОМ ---
     async sendMessage() {
       const userQuery = this.query.trim();
       if (!userQuery || this.loading || !this.currentUser) return;
@@ -121,6 +127,11 @@ createApp({
         this.activeResult = { ...data, displayType };
         this.renderVisualization();
 
+        // Переключаем вид на мобильном устройстве
+        if (this.isMobileScreen) {
+            this.mobileView = 'visualization';
+        }
+
       } catch (e) {
         const lastMessage = this.chatHistory[this.chatHistory.length - 1];
         lastMessage.thinking = false;
@@ -132,6 +143,7 @@ createApp({
       }
     },
 
+    // --- МЕТОДЫ ДЛЯ ОТОБРАЖЕНИЯ РЕЗУЛЬТАТОВ ---
     loadMoreResults() {
         if (!this.activeResult || !this.isTruncated) return;
 
@@ -146,100 +158,52 @@ createApp({
 
     determineDisplayType(data) {
         if (!data.result || data.result.length === 0) return 'table';
-
         const firstRow = data.result[0];
         const columns = Object.keys(firstRow);
-
-        if (data.result.length === 1 && columns.length === 1) {
-            return 'kpi';
-        }
-
-        if (columns.length === 2 && (columns.some(c => c.toLowerCase().includes('count')) || columns.some(c => c.toLowerCase().includes('total')))) {
-            return 'chart';
-        }
-
-        if (columns.includes('title') && (columns.includes('status') || columns.includes('priority'))) {
-            return 'cards';
-        }
-
+        if (data.result.length === 1 && columns.length === 1) return 'kpi';
+        if (columns.length === 2 && (columns.some(c => c.toLowerCase().includes('count')) || columns.some(c => c.toLowerCase().includes('total')))) return 'chart';
+        if (columns.includes('title') && (columns.includes('status') || columns.includes('priority'))) return 'cards';
         return 'table';
     },
 
     createSummary(data) {
-        if (!data.result || data.result.length === 0) {
-            return "Я ничего не нашел по вашему запросу.";
-        }
+        if (!data.result || data.result.length === 0) return "Я ничего не нашел по вашему запросу.";
         const count = data.result.length;
         let recordsWord = "записей";
         const lastDigit = count % 10;
         const lastTwoDigits = count % 100;
 
-        if (lastDigit === 1 && lastTwoDigits !== 11) {
-            recordsWord = "запись";
-        } else if ([2, 3, 4].includes(lastDigit) && ![12, 13, 14].includes(lastTwoDigits)) {
-            recordsWord = "записи";
-        }
+        if (lastDigit === 1 && lastTwoDigits !== 11) recordsWord = "запись";
+        else if ([2, 3, 4].includes(lastDigit) && ![12, 13, 14].includes(lastTwoDigits)) recordsWord = "записи";
 
         let summaryText = `Отлично, я нашел ${count} ${recordsWord}. `;
-        if(this.isTruncated) {
-            summaryText += `Первые ${this.pageSize} отображены справа.`
-        } else {
-            summaryText += `Результаты отображены справа.`
-        }
+        if(this.isTruncated) summaryText += `Первые ${this.pageSize} отображены справа.`
+        else summaryText += `Результаты отображены справа.`
         return summaryText;
     },
 
     renderVisualization() {
         if (!this.activeResult || !this.activeResult.result || this.activeResult.result.length === 0) return;
-
         nextTick(() => {
             if (this.chartInstance) {
                 this.chartInstance.destroy();
                 this.chartInstance = null;
             }
-
             if (this.activeResult.displayType === 'chart') {
                 const ctx = document.getElementById('resultChart');
                 if (!ctx) return;
-
                 const labels = this.activeResult.result.map(row => row[Object.keys(row)[0]]);
                 const data = this.activeResult.result.map(row => row[Object.keys(row)[1]]);
-
                 this.chartInstance = new Chart(ctx, {
                     type: 'bar',
-                    data: {
-                        labels: labels,
-                        datasets: [{
-                            label: 'Количество',
-                            data: data,
-                            backgroundColor: 'rgba(59, 130, 246, 0.5)',
-                            borderColor: 'rgba(59, 130, 246, 1)',
-                            borderWidth: 1,
-                            borderRadius: 5,
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        scales: {
-                            y: {
-                                beginAtZero: true,
-                                ticks: {
-                                    stepSize: Math.ceil(Math.max(...data) / 10) < 1 ? 1 : undefined
-                                }
-                            }
-                        },
-                        plugins: {
-                            legend: {
-                                display: false
-                            }
-                        }
-                    }
+                    data: { labels: labels, datasets: [{ label: 'Количество', data: data, backgroundColor: 'rgba(59, 130, 246, 0.5)', borderColor: 'rgba(59, 130, 246, 1)', borderWidth: 1, borderRadius: 5 }] },
+                    options: { responsive: true, maintainAspectRatio: false, scales: { y: { beginAtZero: true, ticks: { stepSize: Math.ceil(Math.max(...data) / 10) < 1 ? 1 : undefined } } }, plugins: { legend: { display: false } } }
                 });
             }
         });
     },
 
+    // --- ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ---
     applySuggestion(suggestion) {
         this.query = suggestion;
         this.sendMessage();
@@ -248,13 +212,20 @@ createApp({
     scrollToBottom() {
       nextTick(() => {
         const chatLog = this.$refs.chatLog;
-        if (chatLog) {
-            chatLog.scrollTop = chatLog.scrollHeight;
-        }
+        if (chatLog) chatLog.scrollTop = chatLog.scrollHeight;
       });
+    },
+
+    checkScreenSize() {
+        this.isMobileScreen = window.innerWidth < 768;
     }
   },
   mounted() {
     this.fetchUsers();
+    this.checkScreenSize();
+    window.addEventListener('resize', this.checkScreenSize);
+  },
+  beforeUnmount() {
+    window.removeEventListener('resize', this.checkScreenSize);
   }
 }).mount('#app');
